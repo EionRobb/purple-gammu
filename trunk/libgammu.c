@@ -6,6 +6,7 @@
 #include <blist.h>
 #include <status.h>
 #include <accountopt.h>
+#include <debug.h>
 
 #define GAMMU_PLUGIN_VERSION "0.1"
 #define GAMMU_PLUGIN_ID "prpl-bigbrownchunx-gammu"
@@ -19,6 +20,10 @@ void gam_send_sms_cb(GSM_StateMachine *sm, int status,
 				       int MessageReference, void *user_data)
 {
 	PurpleConnection *pc = user_data;
+	if (status == 0)
+		purple_debug_info("gammu", "Message sent ok\n");
+	else
+		purple_debug_error("gammu", "Message was not sent\n");
 }				       
 
 const char *gam_list_icon(PurpleAccount *account, PurpleBuddy *buddy)
@@ -38,17 +43,85 @@ GList *gam_status_types(PurpleAccount *account)
 	return types;
 }
 
+gboolean gam_check_pin(PurpleConnection *pc)
+{
+	GSM_StateMachine *sm = pc->proto_data;
+	GSM_SecurityCode code;
+	GSM_Error err;
+	const char *password = NULL;
+	PurpleAccount *account;
+	
+	if (sm == NULL)
+		return FALSE;
+	
+	err = GSM_GetSecurityStatus(sm, &code.Type);
+	if (err == ERR_NOTSUPPORTED) {
+		return TRUE;
+	}
+	
+	if (err != ERR_NONE)
+		return FALSE;
+	
+	switch (code.Type) {
+		case SEC_None:
+			return TRUE;
+		case SEC_Pin:
+			//use PIN code
+			break;
+		case SEC_Phone:
+			//use phone code
+			break;
+		case SEC_Network:
+			//use network code
+			break;
+		case SEC_SecurityCode:
+		case SEC_Pin2:
+		case SEC_Puk:
+		case SEC_Puk2:
+			//not sure
+			return FALSE;
+	}
+	
+	account = purple_connection_get_account(pc);
+	password = purple_account_get_password(account);
+	
+	if (!password || password[0] == '\0')
+		return FALSE;
+	
+	g_stpcpy(code.Code, password);
+	err = GSM_EnterSecurityCode(sm, code);
+	if (err == ERR_SECURITYERROR)
+	{
+		//wrong pin
+		return FALSE;
+	}
+	if (err != ERR_NONE)
+	{
+		//some other error
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
 void gam_login(PurpleAccount *account)
 {
+	GSM_Config *gammucfg;
 	PurpleConnection *pc;
 	GSM_StateMachine *sm;
 	int err;
 	gchar imei[30];
+	const gchar *filename = "~/";
 	
 	pc = purple_account_get_connection(account);
 	
 	sm = GSM_AllocStateMachine();
 	pc->proto_data = sm;
+
+	gammucfg = GSM_GetConfig(sm, 0);
+	GSM_ReadConfig(filename, gammucfg, 0);
+	GSM_SetConfigNum(sm, 1);
+	gammucfg->UseGlobalDebugFile = FALSE;
 	
 	err = GSM_InitConnection(sm, 1);
 	if (err == ERR_NONE) {
@@ -56,8 +129,21 @@ void gam_login(PurpleAccount *account)
 		GSM_SetIncomingSMSCallback(sm, gam_got_sms, pc);
 		GSM_SetFastSMSSending(sm, TRUE);
 		//GSM_GetIMEI(sm, &imei);
-		purple_connection_set_state(pc, PURPLE_CONNECTED);
+		if (gam_check_pin(pc))
+		{
+			purple_connection_update_progress(pc, "Done", 1, 1);
+			purple_connection_set_state(pc, PURPLE_CONNECTED);
+		} else {
+			purple_connection_error_reason(pc,
+				PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED,
+				"Incorrect PIN Number");
+		}
+	} else {
+		purple_connection_error_reason(pc,
+			PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
+			"Could not connect to phone");
 	}
+
 	
 }
 
@@ -66,16 +152,29 @@ void gam_close(PurpleConnection *pc)
 	GSM_StateMachine *sm = pc->proto_data;
 	
 	if (GSM_IsConnected(sm))
+	{
+		purple_debug_info("gammu", "Closing connection");
 		GSM_TerminateConnection(sm);
+		if (GSM_IsConnected(sm))
+			GSM_TerminateConnection(sm);
+	}
 	GSM_FreeStateMachine(sm);
+	pc->proto_data = NULL;
 }
 
 int gam_send_im(PurpleConnection *pc, const char *who, const char *message, PurpleMessageFlags flags)
 {
-	GSM_MultiSMSMessage *sms;
+	GSM_MultiSMSMessage sms;
 	GSM_MultiPartSMSInfo info;
+	int i;
+	
+	for (i = 0; i < GSM_MAX_MULTI_SMS; i++) {
+		GSM_SetDefaultSMSData(&sms.SMS[i]);
+	}
 	
 	GSM_ClearMultiPartSMSInfo(&info);
+	
+	return -1;
 }
 
 static gboolean plugin_load(PurplePlugin *plugin)
@@ -94,11 +193,16 @@ static void plugin_init(PurplePlugin *plugin)
 	PurplePluginInfo *info = plugin->info;
 	PurplePluginProtocolInfo *prpl_info = info->extra_info;
 
-//	option = purple_account_option_bool_new(
-//		_("Edit Facebook friends from Pidgin"),
-//		"facebook_manage_friends", FALSE);
-//	prpl_info->protocol_options = g_list_append(
-//		prpl_info->protocol_options, option);
+	option = purple_account_option_string_new(
+		"Port", "port", "COM5");
+	prpl_info->protocol_options = g_list_append(
+		prpl_info->protocol_options, option);
+	
+	option = purple_account_option_string_new(
+		"Connection", "connection", "at115200");
+	prpl_info->protocol_options = g_list_append(
+		prpl_info->protocol_options, option);
+	
 }
 
 static PurplePluginProtocolInfo prpl_info = {
