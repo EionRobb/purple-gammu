@@ -1,3 +1,4 @@
+#include <string.h>
 #include <glib.h>
 #include <gammu.h>
 
@@ -8,12 +9,33 @@
 #include <accountopt.h>
 #include <debug.h>
 
-#define GAMMU_PLUGIN_VERSION "0.1"
+#define GAMMU_PLUGIN_VERSION "0.2"
 #define GAMMU_PLUGIN_ID "prpl-bigbrownchunx-gammu"
+
+void gam_error(GSM_Error err)
+{
+	if (err == ERR_NONE)
+		return;
+	
+	purple_debug_error("gammu", "Failure: %s\n", GSM_ErrorString(err));
+}
 
 void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
 {
 	PurpleConnection *pc = user_data;
+	gchar *sender;
+	gchar *message;
+	
+	sender = DecodeUnicodeString(sms.Number);
+	if (sms.Coding == SMS_Coding_8bit)
+		message = g_strdup("8-bit message, can not display");
+	else
+		message = DecodeUnicodeString(sms.Text);
+	
+	serv_got_im(pc, sender, message, PURPLE_MESSAGE_RECV, time(NULL));
+	
+	g_free(sender);
+	g_free(message);
 }
 
 void gam_send_sms_cb(GSM_StateMachine *sm, int status,
@@ -110,29 +132,40 @@ void gam_login(PurpleAccount *account)
 	PurpleConnection *pc;
 	GSM_StateMachine *sm;
 	int err;
-	gchar imei[30];
-	const gchar *filename = "~/";
+	gchar buffer[100];
 	
 	pc = purple_account_get_connection(account);
+	
+	GSM_InitLocales(NULL);
 	
 	sm = GSM_AllocStateMachine();
 	pc->proto_data = sm;
 
 	gammucfg = GSM_GetConfig(sm, 0);
-	GSM_ReadConfig(filename, gammucfg, 0);
+	
+	gammucfg->Device = g_strdup(purple_account_get_string(account, "port", "com5:"));
+	gammucfg->Connection = g_strdup(purple_account_get_string(account, "connection", "at"));
+	g_stpcpy(gammucfg->Model, purple_account_get_string(account, "model", "auto"));
+	
 	GSM_SetConfigNum(sm, 1);
 	gammucfg->UseGlobalDebugFile = FALSE;
 	
 	err = GSM_InitConnection(sm, 1);
 	if (err == ERR_NONE) {
 		GSM_SetSendSMSStatusCallback(sm, gam_send_sms_cb, pc);
+		GSM_SetIncomingSMS(sm, TRUE);
 		GSM_SetIncomingSMSCallback(sm, gam_got_sms, pc);
 		GSM_SetFastSMSSending(sm, TRUE);
-		//GSM_GetIMEI(sm, &imei);
 		if (gam_check_pin(pc))
 		{
 			purple_connection_update_progress(pc, "Done", 1, 1);
 			purple_connection_set_state(pc, PURPLE_CONNECTED);
+			
+			GSM_GetManufacturer(sm, buffer);
+			purple_debug_info("gammu", "Manufacturer: %s\n", buffer);
+			GSM_GetModel(sm, buffer);
+			purple_debug_info("gammu", "Model: %s (%s)\n", GSM_GetModelInfo(sm)->model, buffer);
+			
 		} else {
 			purple_connection_error_reason(pc,
 				PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED,
@@ -164,18 +197,51 @@ void gam_close(PurpleConnection *pc)
 
 int gam_send_im(PurpleConnection *pc, const char *who, const char *message, PurpleMessageFlags flags)
 {
-	GSM_MultiSMSMessage sms;
-	GSM_MultiPartSMSInfo info;
-	int i;
+	//GSM_MultiSMSMessage sms;
+	//GSM_MultiPartSMSInfo info;
+	GSM_StateMachine *sm = pc->proto_data;
+	GSM_SMSC PhoneSMSC;
+	//int i;
+	GSM_SMSMessage *sms;
 	
-	for (i = 0; i < GSM_MAX_MULTI_SMS; i++) {
-		GSM_SetDefaultSMSData(&sms.SMS[i]);
-	}
+	//for (i = 0; i < GSM_MAX_MULTI_SMS; i++) {
+	//	GSM_SetDefaultSMSData(&sms.SMS[i]);
+	//}
+	sms = g_new0(GSM_SMSMessage, 1);
 	
-	GSM_ClearMultiPartSMSInfo(&info);
+	EncodeUnicode(sms->Text, message, strlen(message));
+	EncodeUnicode(sms->Number, who, strlen(who));
+	sms->PDU = SMS_Submit;
+	sms->UDH.Type = UDH_NoUDH;
+	sms->Coding = SMS_Coding_Default_No_Compression;
+	sms->Class = 1;
 	
-	return -1;
+	// Set this SMS SMSC using the phones SMSC
+	PhoneSMSC.Location = 1;
+	GSM_GetSMSC(sm, &PhoneSMSC);
+	CopyUnicodeString(sms->SMSC.Number, PhoneSMSC.Number);
+
+	GSM_SendSMS(sm, sms);
+	
+	//GSM_ClearMultiPartSMSInfo(&info);
+	g_free(sms);
+	
+	return 1;
 }
+
+#if PURPLE_MAJOR_VERSION >= 2 && PURPLE_MINOR_VERSION >= 5
+static GHashTable *gam_account_text_table(PurpleAccount *account)
+{
+	GHashTable *table;
+	
+	table = g_hash_table_new(g_str_hash, g_str_equal);
+	
+	g_hash_table_insert(table, "login_label", (gpointer)"Anything"));
+	g_hash_table_insert(table, "password_label", (gpointer)"PIN Number"));
+	
+	return table;
+}
+#endif
 
 static gboolean plugin_load(PurplePlugin *plugin)
 {
@@ -276,7 +342,7 @@ static PurplePluginProtocolInfo prpl_info = {
 	NULL,                   /* attention_types */
 #if PURPLE_MAJOR_VERSION >= 2 && PURPLE_MINOR_VERSION >= 5
 	sizeof(PurplePluginProtocolInfo), /* struct_size */
-	NULL                    /* get_account_text_table */
+	gam_account_text_table  /* get_account_text_table */
 #else
 	(gpointer) sizeof(PurplePluginProtocolInfo)
 #endif
