@@ -380,3 +380,34 @@ static PurplePluginInfo info = {
 };
 
 PURPLE_INIT_PLUGIN(gammu, plugin_init, info);
+
+
+#if defined(__MINGW32__) || defined(__APPLE__)
+char *
+strcasestr(char *haystack, char *needle)
+{
+	char *p, *startn = 0, *np = 0;
+	for (p = haystack; *p; p++) {
+		if (np) {
+			if (toupper(*p) == toupper(*np)) {
+				if (!*++np)
+					return startn;
+			} else
+				np = 0;
+		} else if (toupper(*p) == toupper(*needle)) {
+			np = needle + 1;
+			startn = p;
+		}
+	}
+	return 0;
+}
+char *
+strchrnul(const char *s, int c_in)
+{
+	char c = c_in;
+	while (*s && (*s != c))
+		s++;
+	
+	return (char *) s;
+}
+#endif
