@@ -260,12 +260,12 @@ static void plugin_init(PurplePlugin *plugin)
 	PurplePluginProtocolInfo *prpl_info = info->extra_info;
 
 	option = purple_account_option_string_new(
-		"Port", "port", "COM5");
+		"Port", "port", "com5:");
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
 	
 	option = purple_account_option_string_new(
-		"Connection", "connection", "at115200");
+		"Connection", "connection", "at");
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
 	
