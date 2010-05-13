@@ -28,7 +28,8 @@ void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
 	
 	sender = DecodeUnicodeString(sms.Number);
 	if (sms.Coding == SMS_Coding_8bit)
-		message = g_strdup("8-bit message, can not display");
+		//message = g_strdup("8-bit message, can not display");
+		message = g_strdup(sms.Text);
 	else
 		message = DecodeUnicodeString(sms.Text);
 	
@@ -51,6 +52,11 @@ void gam_send_sms_cb(GSM_StateMachine *sm, int status,
 const char *gam_list_icon(PurpleAccount *account, PurpleBuddy *buddy)
 {
 	return "gammu";
+}
+
+const char *gam_list_emblem(PurpleBuddy *buddy)
+{
+	return "mobile";
 }
 
 GList *gam_status_types(PurpleAccount *account)
@@ -203,7 +209,10 @@ int gam_send_im(PurpleConnection *pc, const char *who, const char *message, Purp
 	GSM_SMSC PhoneSMSC;
 	//int i;
 	GSM_SMSMessage *sms;
+	gint encoding;
 	
+	encoding = atoi(purple_account_get_string(pc->account, "encoding", "1"));
+
 	//for (i = 0; i < GSM_MAX_MULTI_SMS; i++) {
 	//	GSM_SetDefaultSMSData(&sms.SMS[i]);
 	//}
@@ -213,7 +222,8 @@ int gam_send_im(PurpleConnection *pc, const char *who, const char *message, Purp
 	EncodeUnicode(sms->Number, who, strlen(who));
 	sms->PDU = SMS_Submit;
 	sms->UDH.Type = UDH_NoUDH;
-	sms->Coding = SMS_Coding_Default_No_Compression;
+
+	sms->Coding = encoding;
 	sms->Class = 1;
 	
 	// Set this SMS SMSC using the phones SMSC
@@ -259,20 +269,89 @@ static void plugin_init(PurplePlugin *plugin)
 	PurplePluginInfo *info = plugin->info;
 	PurplePluginProtocolInfo *prpl_info = info->extra_info;
 
+	GList *encoding_list = NULL;
+	GList *model_list = NULL;
+	GList *connection_list = NULL;
+	PurpleKeyValuePair *kvp;
+
 	option = purple_account_option_string_new(
-		"Port", "port", "com5:");
+		"Port/Device", "port", "com5:");
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
 	
-	option = purple_account_option_string_new(
-		"Connection", "connection", "at");
-	prpl_info->protocol_options = g_list_append(
-		prpl_info->protocol_options, option);
+
+	//Connection
+#define add_connection(x)	kvp = g_new0(PurpleKeyValuePair, 1); \
+							kvp->key = g_strdup( x ); \
+							kvp->value = g_strdup( x ); \
+							connection_list = g_list_append(connection_list, kvp);
+	add_connection("at");
+	add_connection("at19200");
+	add_connection("at115200");
+	add_connection("fbus");
+	add_connection("fbusirda");
+	add_connection("fbusdlr3");
+	add_connection("fbusdku5");
+	add_connection("fbususb");
+	add_connection("dku2phonet");
+	add_connection("dku5fbus2");
+	add_connection("fbuspl2303");
+	add_connection("mbus");
+	add_connection("irdaphonet");
+	add_connection("irdaat");
+	add_connection("irdaobex");
+	add_connection("irdagnapbus");
+	add_connection("bluerffbus");
+	add_connection("bluefbus");
+	add_connection("bluerfphonet");
+	add_connection("bluephonet");
+	add_connection("blueat");
+	add_connection("bluerfat");
+	add_connection("blueobex");
+	add_connection("bluerfobex");
+	add_connection("phonetblue");
+	add_connection("fbusblue");
+	add_connection("bluefgnapbus");
 	
-	option = purple_account_option_string_new(
-		"Model", "model", "auto");
+	option = purple_account_option_list_new(
+		"Connection", "connection", connection_list);
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
+
+	//Model
+#define add_model(x)	kvp = g_new0(PurpleKeyValuePair, 1); \
+						kvp->key = g_strdup( x ); \
+						kvp->value = g_strdup( x ); \
+						model_list = g_list_append(model_list, kvp);
+	add_model("auto");
+	add_model("at");
+	add_model("alcatel");
+	add_model("nauto");
+	add_model("obex");
+	add_model("seobex");
+	
+	option = purple_account_option_list_new(
+		"Model", "model", model_list);
+	prpl_info->protocol_options = g_list_append(
+		prpl_info->protocol_options, option);
+
+	// Encoding
+#define add_encoding(x, y)	kvp = g_new0(PurpleKeyValuePair, 1); \
+							kvp->key = g_strdup( x ); \
+							kvp->value = g_strdup_printf("%d", y); \
+							encoding_list = g_list_append(encoding_list, kvp);
+	add_encoding("Default", SMS_Coding_Default_No_Compression);
+	add_encoding("Default, Compressed", SMS_Coding_Default_Compression);
+	add_encoding("Unicode", SMS_Coding_Unicode_No_Compression);
+	add_encoding("Unicode, Compressed", SMS_Coding_Unicode_Compression);
+	add_encoding("8-bit", SMS_Coding_8bit);
+	
+	option = purple_account_option_list_new(
+		"SMS Encoding", "encoding",
+		encoding_list);
+	prpl_info->protocol_options = g_list_append(
+		prpl_info->protocol_options, option);
+
 	
 }
 
@@ -285,7 +364,7 @@ static PurplePluginProtocolInfo prpl_info = {
 	/* NO_BUDDY_ICONS */    /* icon_spec */
 	{"jpg", 0, 0, 50, 50, -1, PURPLE_ICON_SCALE_SEND}, /* icon_spec */
 	gam_list_icon,          /* list_icon */
-	NULL,                   /* list_emblems */
+	gam_list_emblem,        /* list_emblems */
 	NULL,                   /* status_text */
 	NULL,                   /* tooltip_text */
 	gam_status_types,       /* status_types */
@@ -388,6 +467,7 @@ PURPLE_INIT_PLUGIN(gammu, plugin_init, info);
 
 
 #if defined(__MINGW32__) || defined(__APPLE__)
+#include <ctype.h>
 char *
 strcasestr(char *haystack, char *needle)
 {
