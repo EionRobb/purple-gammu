@@ -1,3 +1,18 @@
+/*
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+                
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+                                
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include <string.h>
 #include <glib.h>
 #include <gammu.h>
@@ -11,6 +26,21 @@
 
 #define GAMMU_PLUGIN_VERSION "0.2"
 #define GAMMU_PLUGIN_ID "prpl-bigbrownchunx-gammu"
+
+typedef struct {
+	GSM_StateMachine *sm;
+	guint readDeviceTimeout;
+} GammuProtoData;
+
+gboolean
+gam_read_device(gpointer userdata)
+{
+	GSM_StateMachine *sm = userdata;
+	
+	GSM_ReadDevice(sm, FALSE);
+
+	return GSM_IsConnected(sm);
+}
 
 void gam_error(GSM_Error err)
 {
@@ -167,23 +197,25 @@ void gam_login(PurpleAccount *account)
 			purple_connection_update_progress(pc, "Done", 1, 1);
 			purple_connection_set_state(pc, PURPLE_CONNECTED);
 			
-			GSM_GetManufacturer(sm, buffer);
-			purple_debug_info("gammu", "Manufacturer: %s\n", buffer);
-			GSM_GetModel(sm, buffer);
-			purple_debug_info("gammu", "Model: %s (%s)\n", GSM_GetModelInfo(sm)->model, buffer);
-			
 		} else {
 			purple_connection_error_reason(pc,
 				PURPLE_CONNECTION_ERROR_AUTHENTICATION_FAILED,
 				"Incorrect PIN Number");
+			return;
 		}
 	} else {
 		purple_connection_error_reason(pc,
 			PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
 			"Could not connect to phone");
+		return;
 	}
 
-	
+	GSM_GetManufacturer(sm, buffer);
+	purple_debug_info("gammu", "Manufacturer: %s\n", buffer);
+	GSM_GetModel(sm, buffer);
+	purple_debug_info("gammu", "Model: %s (%s)\n", GSM_GetModelInfo(sm)->model, buffer);
+			
+	purple_timeout_add_seconds(1, gam_read_device, sm);
 }
 
 void gam_close(PurpleConnection *pc)
