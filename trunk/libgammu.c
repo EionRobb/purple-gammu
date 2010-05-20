@@ -42,12 +42,30 @@ gam_read_device(gpointer userdata)
 	return GSM_IsConnected(sm);
 }
 
+void
+gam_debug_func(const char *text, void *data)
+{
+	purple_debug_info("gammu", "%s\n", text);
+}
+
 void gam_error(GSM_Error err)
 {
 	if (err == ERR_NONE)
 		return;
 	
 	purple_debug_error("gammu", "Failure: %s\n", GSM_ErrorString(err));
+}
+
+void gam_keepalive(PurpleConnection *pc)
+{
+	GSM_StateMachine *sm = pc->proto_data;
+
+	if (!GSM_IsConnected(sm))
+	{
+		purple_connection_error_reason(pc,
+			PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
+			"Could not connect to phone");	
+	}
 }
 
 void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
@@ -89,6 +107,18 @@ const char *gam_list_emblem(PurpleBuddy *buddy)
 	return "mobile";
 }
 
+void gam_make_online(PurpleAccount *account, const char* name)
+{
+	GSList *buddies = purple_find_buddies(account, name);
+	PurpleBuddy *buddy;
+
+	for(; buddies; buddies = g_slist_delete_link(buddies, buddies))
+	{
+		buddy = buddies->data;
+		purple_prpl_got_user_status(account, buddy->name, purple_primitive_get_id_from_type(PURPLE_STATUS_AVAILABLE), NULL);
+	}	
+}
+
 GList *gam_status_types(PurpleAccount *account)
 {
 	GList *types = NULL;
@@ -99,6 +129,12 @@ GList *gam_status_types(PurpleAccount *account)
 	types = g_list_append(types, status);
 
 	return types;
+}
+
+void gam_add_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group)
+{
+	//TODO add to phone contact list
+	gam_make_online(pc->account, buddy->name);
 }
 
 gboolean gam_check_pin(PurpleConnection *pc)
@@ -214,6 +250,8 @@ void gam_login(PurpleAccount *account)
 	purple_debug_info("gammu", "Manufacturer: %s\n", buffer);
 	GSM_GetModel(sm, buffer);
 	purple_debug_info("gammu", "Model: %s (%s)\n", GSM_GetModelInfo(sm)->model, buffer);
+
+	gam_make_online(account, NULL);
 			
 	purple_timeout_add_seconds(1, gam_read_device, sm);
 }
@@ -242,6 +280,11 @@ int gam_send_im(PurpleConnection *pc, const char *who, const char *message, Purp
 	//int i;
 	GSM_SMSMessage *sms;
 	gint encoding;
+
+	if (!GSM_IsConnected(sm))
+	{
+		return -1;
+	}
 	
 	encoding = atoi(purple_account_get_string(pc->account, "encoding", "1"));
 
@@ -384,7 +427,7 @@ static void plugin_init(PurplePlugin *plugin)
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
 
-	
+	GSM_SetDebugFunction(gam_debug_func, NULL, GSM_GetGlobalDebug());	
 }
 
 static PurplePluginProtocolInfo prpl_info = {
@@ -428,7 +471,7 @@ static PurplePluginProtocolInfo prpl_info = {
 	NULL,                   /* chat_leave */
 	NULL,                   /* chat_whisper */
 	NULL,                   /* chat_send */
-	NULL,                   /* keepalive */
+	gam_keepalive,          /* keepalive */
 	NULL,                   /* register_user */
 	NULL,                   /* get_cb_info */
 	NULL,                   /* get_cb_away */
