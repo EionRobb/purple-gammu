@@ -60,12 +60,7 @@ void gam_keepalive(PurpleConnection *pc)
 {
 	GSM_StateMachine *sm = pc->proto_data;
 
-	if (!GSM_IsConnected(sm))
-	{
-		purple_connection_error_reason(pc,
-			PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
-			"Could not connect to phone");	
-	}
+	GSM_ReadDevice(sm, false);
 }
 
 void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
@@ -198,6 +193,68 @@ gboolean gam_check_pin(PurpleConnection *pc)
 	return TRUE;
 }
 
+void gam_download_buddies(PurpleConnection *pc)
+{
+	GSM_StateMachine *sm = pc->proto_data;
+	GSM_MemoryEntry entry;
+	GSM_Error error = ERR_NONE;
+	gchar *text;
+	int i;
+	
+	gchar *name;
+	gchar *number;
+	
+	entry.MemoryType = MEM_ME; //Read from internal memory
+	entry.Location = 0;
+	
+	for(error = GSM_GetNextMemory(sm, &entry, TRUE);
+		error == ERR_NONE;
+		error = GSM_GetNextMemory(sm, &entry, FALSE))
+	{
+		name = NULL;
+		number = NULL;		
+		purple_debug_info("gammu", "buddy %d\n", entry.Location);
+		for(i = 0; i < entry.EntriesNum; i++)
+		{
+			purple_debug_info("gammu", "entry type %d\n", entry.Entries[i].EntryType);
+			switch(entry.Entries[i].EntryType) {
+				case PBK_Number_General:
+				case PBK_Number_Mobile:
+				case PBK_Number_Mobile_Work:
+				case PBK_Number_Mobile_Home:
+					if (number == NULL)
+					{
+						number = DecodeUnicodeString(entry.Entries[i].Text);
+					}
+					break;
+				case PBK_Text_Name:
+				case PBK_Text_FirstName:
+					if (name == NULL)
+					{
+						name = DecodeUnicodeString(entry.Entries[i].Text);
+					}
+					break;
+				case PBK_Photo:
+					purple_debug_info("gammu", "Found a photo for location %d!\n", entry.Entries[i].Number);
+					//GSM_BinaryPicture picture = entry.Entries[i].Picture;
+					break;
+				default:
+					break;
+			}
+		}
+		if (name && number && !purple_find_buddy(account, number))
+		{
+			PurpleBuddy *buddy = purple_buddy_new(account, number, name);
+			purple_blist_add_buddy(buddy, NULL, NULL, NULL);
+		}
+		g_free(name);
+		g_free(number);
+
+		GSM_FreeMemoryEntry(&entry);
+	}
+	gam_error(error);
+}
+
 void gam_login(PurpleAccount *account)
 {
 	GSM_Config *gammucfg;
@@ -251,6 +308,10 @@ void gam_login(PurpleAccount *account)
 	GSM_GetModel(sm, buffer);
 	purple_debug_info("gammu", "Model: %s (%s)\n", GSM_GetModelInfo(sm)->model, buffer);
 
+	if (purple_account_get_bool(account, "download_phonebook", FALSE))
+	{
+		gam_download_buddies(pc);
+	}
 	gam_make_online(account, NULL);
 			
 	purple_timeout_add_seconds(1, gam_read_device, sm);
@@ -424,6 +485,11 @@ static void plugin_init(PurplePlugin *plugin)
 	option = purple_account_option_list_new(
 		"SMS Encoding", "encoding",
 		encoding_list);
+	prpl_info->protocol_options = g_list_append(
+		prpl_info->protocol_options, option);
+
+	option = purple_account_option_bool_new(
+		"Download phonebook", "download_phonebook", FALSE);
 	prpl_info->protocol_options = g_list_append(
 		prpl_info->protocol_options, option);
 

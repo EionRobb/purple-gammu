@@ -8,3 +8,4 @@ all:	libgammu.c
 
 libgammu.dll:	libgammu.c
 	i586-mingw32-gcc libgammu.c -o libgammu.dll -shared -dynamic ${LIBPURPLE_CFLAGS} ${GLIB_CFLAGS} ${GAMMU_CFLAGS} -g -Wall -pipe -mno-cygwin -L./Gammu-1.27.93-Windows-Minimal/lib -L/root/pidgin/pidgin-2.3.0_win32/libpurple -L/root/pidgin/win32-dev/gtk_2_0/lib -lws2_32 -lsetupapi -lpurple
+	upx libgammu.dll
