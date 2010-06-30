@@ -60,7 +60,7 @@ void gam_keepalive(PurpleConnection *pc)
 {
 	GSM_StateMachine *sm = pc->proto_data;
 
-	GSM_ReadDevice(sm, false);
+	GSM_ReadDevice(sm, FALSE);
 }
 
 void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
@@ -198,6 +198,7 @@ void gam_download_buddies(PurpleConnection *pc)
 	GSM_StateMachine *sm = pc->proto_data;
 	GSM_MemoryEntry entry;
 	GSM_Error error = ERR_NONE;
+	PurpleAccount *account = pc->account;
 	gchar *text;
 	int i;
 	
