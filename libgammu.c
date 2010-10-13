@@ -24,7 +24,7 @@
 #include <accountopt.h>
 #include <debug.h>
 
-#define GAMMU_PLUGIN_VERSION "0.2"
+#define GAMMU_PLUGIN_VERSION "0.3"
 #define GAMMU_PLUGIN_ID "prpl-bigbrownchunx-gammu"
 
 typedef struct {
@@ -38,14 +38,14 @@ gam_read_device(gpointer userdata)
 	GSM_StateMachine *sm = userdata;
 	
 	GSM_ReadDevice(sm, FALSE);
-
+	
 	return GSM_IsConnected(sm);
 }
 
 void
 gam_debug_func(const char *text, void *data)
 {
-	purple_debug_info("gammu", "%s\n", text);
+	purple_debug_misc("gammu", "%s\n", text);
 }
 
 void gam_error(GSM_Error err)
@@ -58,7 +58,8 @@ void gam_error(GSM_Error err)
 
 void gam_keepalive(PurpleConnection *pc)
 {
-	GSM_StateMachine *sm = pc->proto_data;
+	GammuProtoData *proto_data = pc->proto_data;
+	GSM_StateMachine *sm = proto_data->sm;
 
 	GSM_ReadDevice(sm, FALSE);
 }
@@ -68,15 +69,25 @@ void gam_got_sms(GSM_StateMachine *sm, GSM_SMSMessage sms, void *user_data)
 	PurpleConnection *pc = user_data;
 	gchar *sender;
 	gchar *message;
+
+	purple_debug_info("gammu", "gam_got_sms\n");
 	
-	sender = DecodeUnicodeString(sms.Number);
+	sender = g_strdup(DecodeUnicodeString(sms.Number));
+	purple_debug_info("gammu", "sender: '%s'\n", sender);
 	if (sms.Coding == SMS_Coding_8bit)
+	{
+		purple_debug_info("gammu", "8 bit\n");
 		//message = g_strdup("8-bit message, can not display");
 		message = g_strdup(sms.Text);
-	else
-		message = DecodeUnicodeString(sms.Text);
+	} else {
+		message = g_strdup(DecodeUnicodeString(sms.Text));
+	}
 	
-	serv_got_im(pc, sender, message, PURPLE_MESSAGE_RECV, time(NULL));
+	purple_debug_info("gammu", "message: '%s'\n", message);
+	if(*sender && *message)
+		serv_got_im(pc, sender, message, PURPLE_MESSAGE_RECV, time(NULL));
+	else
+		purple_debug_error("gammu", "Sender or message blank\n");
 	
 	g_free(sender);
 	g_free(message);
@@ -120,7 +131,11 @@ GList *gam_status_types(PurpleAccount *account)
 	PurpleStatusType *status;
 	
 	//Only online
-	status = purple_status_type_new_full(PURPLE_STATUS_AVAILABLE, NULL, "Online", FALSE, TRUE, FALSE);
+	status = purple_status_type_new_full(PURPLE_STATUS_AVAILABLE, NULL, "Online", TRUE, TRUE, FALSE);
+	types = g_list_append(types, status);
+
+	// Must specify offline, but make unsettable
+	status = purple_status_type_new_full(PURPLE_STATUS_OFFLINE, NULL, "Offline", FALSE, FALSE, FALSE);
 	types = g_list_append(types, status);
 
 	return types;
@@ -134,7 +149,8 @@ void gam_add_buddy(PurpleConnection *pc, PurpleBuddy *buddy, PurpleGroup *group)
 
 gboolean gam_check_pin(PurpleConnection *pc)
 {
-	GSM_StateMachine *sm = pc->proto_data;
+	GammuProtoData *proto_data = pc->proto_data;
+	GSM_StateMachine *sm = proto_data->sm;
 	GSM_SecurityCode code;
 	GSM_Error err;
 	const char *password = NULL;
@@ -195,7 +211,8 @@ gboolean gam_check_pin(PurpleConnection *pc)
 
 void gam_download_buddies(PurpleConnection *pc)
 {
-	GSM_StateMachine *sm = pc->proto_data;
+	GammuProtoData *proto_data = pc->proto_data;
+	GSM_StateMachine *sm = proto_data->sm;
 	GSM_MemoryEntry entry;
 	GSM_Error error = ERR_NONE;
 	PurpleAccount *account = pc->account;
@@ -213,7 +230,7 @@ void gam_download_buddies(PurpleConnection *pc)
 		error = GSM_GetNextMemory(sm, &entry, FALSE))
 	{
 		name = NULL;
-		number = NULL;		
+		number = NULL;
 		purple_debug_info("gammu", "buddy %d\n", entry.Location);
 		for(i = 0; i < entry.EntriesNum; i++)
 		{
@@ -225,14 +242,16 @@ void gam_download_buddies(PurpleConnection *pc)
 				case PBK_Number_Mobile_Home:
 					if (number == NULL)
 					{
-						number = DecodeUnicodeString(entry.Entries[i].Text);
+						number = g_strdup(DecodeUnicodeString(entry.Entries[i].Text));
+						purple_debug_info("gammu", "number %s\n", number);
 					}
 					break;
 				case PBK_Text_Name:
 				case PBK_Text_FirstName:
 					if (name == NULL)
 					{
-						name = DecodeUnicodeString(entry.Entries[i].Text);
+						name = g_strdup(DecodeUnicodeString(entry.Entries[i].Text));
+						purple_debug_info("gammu", "name %s\n", name);
 					}
 					break;
 				case PBK_Photo:
@@ -245,6 +264,7 @@ void gam_download_buddies(PurpleConnection *pc)
 		}
 		if (name && number && !purple_find_buddy(account, number))
 		{
+			purple_debug_info("gammu", "adding %s (%s)\n", number, name);
 			PurpleBuddy *buddy = purple_buddy_new(account, number, name);
 			purple_blist_add_buddy(buddy, NULL, NULL, NULL);
 		}
@@ -263,13 +283,17 @@ void gam_login(PurpleAccount *account)
 	GSM_StateMachine *sm;
 	int err;
 	gchar buffer[100];
+	GammuProtoData *proto_data;
 	
 	pc = purple_account_get_connection(account);
 	
 	GSM_InitLocales(NULL);
 	
+	proto_data = g_new0(GammuProtoData, 1);
+	pc->proto_data = proto_data;
+
 	sm = GSM_AllocStateMachine();
-	pc->proto_data = sm;
+	proto_data->sm = sm;
 
 	gammucfg = GSM_GetConfig(sm, 0);
 	
@@ -315,12 +339,15 @@ void gam_login(PurpleAccount *account)
 	}
 	gam_make_online(account, NULL);
 			
-	purple_timeout_add_seconds(1, gam_read_device, sm);
+	proto_data->readDeviceTimeout = purple_timeout_add_seconds(1, gam_read_device, sm);
 }
 
 void gam_close(PurpleConnection *pc)
 {
-	GSM_StateMachine *sm = pc->proto_data;
+	GammuProtoData *proto_data = pc->proto_data;
+	GSM_StateMachine *sm = proto_data->sm;
+	
+	purple_timeout_remove(proto_data->readDeviceTimeout);
 	
 	if (GSM_IsConnected(sm))
 	{
@@ -330,6 +357,8 @@ void gam_close(PurpleConnection *pc)
 			GSM_TerminateConnection(sm);
 	}
 	GSM_FreeStateMachine(sm);
+	
+	g_free(proto_data);
 	pc->proto_data = NULL;
 }
 
@@ -337,7 +366,8 @@ int gam_send_im(PurpleConnection *pc, const char *who, const char *message, Purp
 {
 	//GSM_MultiSMSMessage sms;
 	//GSM_MultiPartSMSInfo info;
-	GSM_StateMachine *sm = pc->proto_data;
+	GammuProtoData *proto_data = pc->proto_data;
+	GSM_StateMachine *sm = proto_data->sm;
 	GSM_SMSC PhoneSMSC;
 	//int i;
 	GSM_SMSMessage *sms;
@@ -503,8 +533,8 @@ static PurplePluginProtocolInfo prpl_info = {
 
 	NULL,                   /* user_splits */
 	NULL,                   /* protocol_options */
-	/* NO_BUDDY_ICONS */    /* icon_spec */
-	{"jpg", 0, 0, 50, 50, -1, PURPLE_ICON_SCALE_SEND}, /* icon_spec */
+	NO_BUDDY_ICONS,         /* icon_spec */
+	/*{"jpg", 0, 0, 50, 50, -1, PURPLE_ICON_SCALE_SEND},*/ /* icon_spec */
 	gam_list_icon,          /* list_icon */
 	gam_list_emblem,        /* list_emblems */
 	NULL,                   /* status_text */
